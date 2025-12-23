@@ -1,0 +1,12 @@
+appenders:
+  file_logger:
+    kind: file
+    path: "log/app.log"
+    append: false
+    encoder:
+      pattern: "{d} - {l} - {m}{n}"
+
+root:
+  level: info
+  appenders:
+    - file_logger
