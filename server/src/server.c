@@ -34,7 +34,7 @@ typedef struct {
 	bool active;
 } Client;
 
-typedef struct {
+typedef struct __attribute((packed)) {
 	float x;
 	float y;
 	float dx;
@@ -43,11 +43,13 @@ typedef struct {
 
 typedef struct {
 	Position* ball_position;
+	Position* player_positions;
 	int udp_sock_fd;
 	struct timespec latest_tick;
 	Client* clients;
 } TickState;
 
+// force compiler to remove hidden packing in the structure, which causes deserialization errors
 struct __attribute((packed)) PositionMessage {
 	uint32_t id;
 	Position position;
@@ -66,6 +68,39 @@ void serialize_position_message(const struct PositionMessage* msg, uint8_t* buff
 		memcpy(buffer + 4 + (i * 4), &net_val, 4);
 	}
 }
+
+void deserialize_position_message(const uint8_t* buffer, struct PositionMessage* msg) {
+	uint32_t temp_val;
+	memcpy(&temp_val, buffer, 4);
+	msg->id = ntohl(temp_val);
+	
+	uint32_t host_bits;
+	int offset = 4;
+
+	memcpy(&temp_val, buffer + offset, 4);
+	host_bits = ntohl(temp_val);
+	memcpy(&msg->position.x, &host_bits, 4);
+	offset += 4;
+
+	// y
+	memcpy(&temp_val, buffer + offset, 4); 
+	host_bits = ntohl(temp_val);
+	memcpy(&msg->position.y, &host_bits, 4); 
+	offset += 4;
+	    
+	// dx
+	memcpy(&temp_val, buffer + offset, 4); 
+	host_bits = ntohl(temp_val);
+	memcpy(&msg->position.dx, &host_bits, 4); 
+	offset += 4;
+    
+	// dy
+	memcpy(&temp_val, buffer + offset, 4); 
+	host_bits = ntohl(temp_val);
+	memcpy(&msg->position.dy, &host_bits, 4);
+
+}
+
 
 void tick(union sigval sv) {
 	TickState *tick_state = (TickState *)sv.sival_ptr;
@@ -95,11 +130,11 @@ void tick(union sigval sv) {
 		tick_state->ball_position->dy *= -1;
 	}
 
-	printf("New ball position: (%f, %f)\n", tick_state->ball_position->x, tick_state->ball_position->y);
+	// printf("New ball position: (%f, %f)\n", tick_state->ball_position->x, tick_state->ball_position->y);
 
 	struct PositionMessage msg;
 	// htonl converts unint32_t to network-byte order (i.e., big-endian)
-	msg.id = htonl(0);
+	msg.id = 0;
 	msg.position = *tick_state->ball_position;
 
 	uint8_t message_buffer[20];
@@ -123,6 +158,43 @@ void tick(union sigval sv) {
 
 		if (sent < 0)
 			perror("sendto");
+
+	}
+
+	// broadcast every player position to all other clients
+	for (int i = 0; i < MAX_CLIENTS; i++) {
+		Client* broadcaster = &tick_state->clients[i];
+
+		if (!broadcaster->active)
+			continue;
+
+		for (int j = 0; j < MAX_CLIENTS; j++) {
+			if (j == i) 
+				continue;
+			Client* receiver = &tick_state->clients[j];
+			if (!receiver->active)
+				continue;
+
+			struct PositionMessage player_msg;
+			player_msg.id = j + 1;
+			player_msg.position = tick_state->player_positions[j];
+			uint8_t player_message_buffer[20];
+
+			serialize_position_message(&player_msg, player_message_buffer);
+			ssize_t sent = sendto(
+				tick_state->udp_sock_fd,
+				&player_message_buffer,
+				sizeof(player_message_buffer),
+				0,
+				(struct sockaddr*)&broadcaster->addr,
+				sizeof(broadcaster->addr)
+			);
+
+			if (sent < 0)
+				perror("sendto");
+
+			printf("sent %lu bytes to client %d for player %d's position \n", sent, j + 1, i + 1);
+		}
 	}
 
 	tick_state->latest_tick = now;
@@ -182,6 +254,9 @@ int main(void)
 	
 	Client clients[MAX_CLIENTS];
 	memset(clients, 0, sizeof(clients));	
+
+	Position player_positions[MAX_CLIENTS];
+	memset(player_positions, 0, sizeof(player_positions));
 	
 	int tcp_listener, udp_listener;		// FD for the server listener
 	int newfd;		// newly accepted fd
@@ -289,7 +364,7 @@ int main(void)
 	struct sigevent sev = {0};
 	struct itimerspec its;
 	
-	TickState tick_state = { .ball_position = &ballPosition, .udp_sock_fd = udp_listener, .clients = clients};
+	TickState tick_state = { .ball_position = &ballPosition, .player_positions = &player_positions, .udp_sock_fd = udp_listener, .clients = clients};
 	clock_gettime(CLOCK_MONOTONIC, &tick_state.latest_tick);
 
 	sev.sigev_notify = SIGEV_THREAD;
@@ -355,14 +430,24 @@ int main(void)
 					struct sockaddr_in from;
 					socklen_t fromlen = sizeof(from);
 					
-					struct PositionMessage positionMessage;
-					if ((nbytes = recvfrom(udp_listener, &positionMessage, sizeof(positionMessage), 0,
+					uint8_t buffer[1024];
+					if ((nbytes = recvfrom(udp_listener, &buffer, sizeof(buffer), 0,
 							(struct sockaddr *)&from, &fromlen)) <= 0) {
 						// got error
 						perror("recvfrom");
 					}
 
-					find_or_add_udp_client(clients, &from);
+					int client_id = find_or_add_udp_client(clients, &from);
+					if (client_id != -1) {
+						printf("Registering client %d\n", client_id);
+						// set player_position for the client to the received position
+						// TODO:  validate packet size
+						
+						struct PositionMessage positionMessage;
+						deserialize_position_message(buffer, &positionMessage);
+						player_positions[client_id] = positionMessage.position;
+						printf("setting position of client %d to (%f, %f)\n", client_id, positionMessage.position.x, positionMessage.position.y);
+					}
 
 					printf("udp_listener: got packet from %s\n",
 						inet_ntoa(from.sin_addr));

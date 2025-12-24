@@ -7,7 +7,7 @@ use ratatui::{
     DefaultTerminal, TerminalOptions, Viewport, Frame
 };
 use crossterm::{
-    event::{self, Event, EventStream, KeyCode, KeyEvent, KeyEventKind},
+    event::{self, Event, EventStream, KeyCode, KeyEvent, KeyEventKind, PushKeyboardEnhancementFlags, KeyboardEnhancementFlags},
     execute,
     terminal::{EnterAlternateScreen }
 };
@@ -22,22 +22,19 @@ use futures::{StreamExt, FutureExt};
 
 mod network;
 use network::udp_client::UdpClient;
+use network::models::Position;
 
 const TICK_RATE: u64 = 16;  // ~60 fps
 
 const COLS: u16 = 300;
 const ROWS: u16 = 50;
 
-const BALL_RADIUS: f64 = 2.0;
-const PLAYER_LENGTH: f64 = 2.0;
+const BALL_RADIUS: f32 = 2.0;
+const PLAYER_LENGTH: f32 = 2.0;
 
-#[derive(Debug)]
-pub struct Position {
-    x: f64,
-    y: f64,
-    dx: f64,
-    dy: f64
-}
+const PLAYER_MOVE_SPEED: f32 = 5.0;
+
+const ANTI_ALIASING_TIMEOUT: u64 = 350;
 
 #[derive(Debug)]
 pub struct App {
@@ -49,36 +46,46 @@ pub struct App {
     ball_dx: u8,
     ball_dy: u8,
 
+    w_pressed: bool,
+    w_last_seen: Instant,
+    s_pressed: bool,
+    s_last_seen: Instant,
     exit: bool
 }
 
 
 impl App {
 
-    const fn new() -> Self {
+    fn new() -> Self {
+        let now = Instant::now();
         Self {
             player: Position {
-                x: COLS as f64 - 10.0,
-                y: ROWS as f64 / 2.0,
+                x: COLS as f32 - 10.0,
+                y: ROWS as f32 / 2.0,
                 dx: 0.0,
                 dy: 0.0
             },
             opponent: Position {
                 x: 10.0,
-                y: ROWS as f64 / 2.0,
+                y: ROWS as f32 / 2.0,
                 dx: 0.0,
                 dy: 0.0
             },
             player_score: 0,
             opponent_score: 0,
             ball: Position {
-                x: COLS as f64 / 2.0,
-                y: ROWS as f64 / 2.0,
+                x: COLS as f32 / 2.0,
+                y: ROWS as f32 / 2.0,
                 dx: 5.0,
                 dy: 5.0
             },
             ball_dx: 0,
             ball_dy: 0,
+
+            w_pressed: false,
+            w_last_seen: now,
+            s_pressed: false,
+            s_last_seen: now,
             exit: false
         }
     }
@@ -96,7 +103,7 @@ impl App {
             tokio::select! {
                 _ = ticker.tick() => {
                     let now = Instant::now();
-                    let delta_time = now.duration_since(last_tick).as_secs_f64();
+                    let delta_time = now.duration_since(last_tick).as_secs_f32();
                     last_tick = now;
 
                     let mut app = state.lock().await;
@@ -114,7 +121,7 @@ impl App {
         Ok(())
     }
 
-    fn tick(&mut self, delta_time: f64) -> Result<()> {
+    fn tick(&mut self, delta_time: f32) -> Result<()> {
         // commenting out to rely on server physics
         // self.ball.x += self.ball.dx * delta_time;
         // self.ball.y += self.ball.dy * delta_time;
@@ -134,6 +141,28 @@ impl App {
         //     self.ball.y = ROWS as f64 - BALL_RADIUS;
         //     self.ball.dy *= -1.0;
         // }
+       
+        let now = Instant::now();
+        let timeout = Duration::from_millis(ANTI_ALIASING_TIMEOUT);
+        if self.s_pressed && now.duration_since(self.s_last_seen) > timeout {
+            self.s_pressed = false;
+        }
+        if self.w_pressed && now.duration_since(self.w_last_seen) > timeout {
+            self.w_pressed = false;
+        }
+
+        if self.s_pressed {
+            self.player.y -= PLAYER_MOVE_SPEED * delta_time;
+        }
+        if self.w_pressed {
+            self.player.y += PLAYER_MOVE_SPEED * delta_time;
+        }
+
+        if self.player.y >= ROWS.into() {
+            self.player.y = ROWS.into();
+        } else if self.player.y <= 0.0 {
+            self.player.y = 0.0;
+        }
         
 
         Ok(())
@@ -160,25 +189,25 @@ impl App {
             .marker(ratatui::symbols::Marker::Braille)
             .paint(|ctx| {
                 ctx.draw(&Circle {
-                    x: self.ball.x,
-                    y: self.ball.y,
-                    radius: BALL_RADIUS,
+                    x: self.ball.x as f64,
+                    y: self.ball.y as f64,
+                    radius: BALL_RADIUS as f64,
                     color: Color::Yellow
                 });
 
                 ctx.draw(&Rectangle {
-                    x: self.player.x,
-                    y: self.player.y,
-                    width: PLAYER_LENGTH,
-                    height: PLAYER_LENGTH,
+                    x: self.player.x as f64,
+                    y: self.player.y as f64,
+                    width: PLAYER_LENGTH as f64,
+                    height: PLAYER_LENGTH as f64,
                     color: Color::Green
                 });
 
                 ctx.draw(&Rectangle {
-                    x: self.opponent.x,
-                    y: self.opponent.y,
-                    width: PLAYER_LENGTH,
-                    height: PLAYER_LENGTH,
+                    x: self.opponent.x as f64,
+                    y: self.opponent.y as f64,
+                    width: PLAYER_LENGTH as f64,
+                    height: PLAYER_LENGTH as f64,
                     color: Color::Red
                 });
             })
@@ -205,8 +234,17 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Char('q') => self.exit(),
+        let now = Instant::now();
+        match (key_event.code, key_event.kind) {
+            (KeyCode::Char('q'), _) => self.exit(),
+            (KeyCode::Char('w'), KeyEventKind::Press) => {
+                self.w_pressed = true;
+                self.w_last_seen = now;
+            },
+            (KeyCode::Char('s'), KeyEventKind::Press) => {
+                self.s_pressed = true;
+                self.s_last_seen = now;
+            },
             _ => {}
         }
     }
@@ -226,6 +264,7 @@ async fn main() -> Result<()> {
     // networking
     let udp_client = UdpClient::connect(Arc::clone(&app)).await?;
     tokio::spawn(async move { udp_client.listen().await });
+
 
     execute!(stdout(), EnterAlternateScreen)?;
 

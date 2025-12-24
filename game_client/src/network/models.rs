@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize, Deserializer};
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[repr(C)]
 pub struct Position {
     pub x: f32,
@@ -9,7 +9,7 @@ pub struct Position {
     pub dy: f32
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[repr(C)]
 pub struct PositionMessage {
     pub id: u32,
