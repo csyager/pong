@@ -101,6 +101,31 @@ void deserialize_position_message(const uint8_t* buffer, struct PositionMessage*
 
 }
 
+struct __attribute((packed)) TcpMessage {
+	uint32_t opcode;
+};
+
+void deserialize_tcp_message(char buffer[256], struct TcpMessage* msg) {
+	uint32_t temp_val;
+	memcpy(&temp_val, buffer, 4);
+	msg->opcode = ntohl(temp_val);
+}
+
+struct __attribute((packed)) TcpResponse {
+	uint32_t statuscode;
+	char msg[256];
+};
+
+void serialize_tcp_response(const struct TcpResponse* tcpResponse, uint8_t* buffer) {
+	uint32_t id = htonl(tcpResponse->statuscode);
+	memcpy(buffer, &id, 4);
+	size_t offset = 4;
+	
+	memcpy(buffer + offset, tcpResponse->msg, sizeof(tcpResponse->msg));
+}
+
+
+
 
 void tick(union sigval sv) {
 	TickState *tick_state = (TickState *)sv.sival_ptr;
@@ -466,6 +491,29 @@ int main(void)
 						close(i);
 						FD_CLR(i, &master);	// remove from master set
 					} else {
+						// check opcode
+						struct TcpMessage tcpMessage;
+						deserialize_tcp_message(buf, &tcpMessage);
+						if (tcpMessage.opcode == 0) {
+							// register request
+							printf("Registering player\n");
+							// respond
+							struct TcpResponse tcpResponse = {0, "test"};
+
+							uint8_t response_buffer[260];
+							for (int k = 0; k < sizeof(response_buffer) * sizeof(uint8_t); k++) {
+								printf("%d, ", response_buffer[k]);
+							}
+							serialize_tcp_response(&tcpResponse, &response_buffer);
+
+							if (send(i, response_buffer, sizeof(response_buffer), 0) == -1) {
+								perror("send");
+							}
+
+							printf("sent %lu bytes\n", sizeof(response_buffer));
+
+						}
+
 						// we got some data from the client
 						for (j = 0; j <= fdmax; j++) {
 							// send to everyone (i.e., every fd in the master set)!

@@ -22,7 +22,10 @@ use futures::{StreamExt, FutureExt};
 
 mod network;
 use network::udp_client::UdpClient;
-use network::models::Position;
+use network::tcp_client::TcpClient;
+use network::models::{Position, TcpRequest, RegisterResponseMessage};
+
+use log::{info};
 
 const TICK_RATE: u64 = 16;  // ~60 fps
 
@@ -264,7 +267,16 @@ async fn main() -> Result<()> {
     // networking
     let udp_client = UdpClient::connect(Arc::clone(&app)).await?;
     tokio::spawn(async move { udp_client.listen().await });
+    
+    let mut tcp_client: TcpClient = TcpClient::connect(Arc::clone(&app)).await?;
+    
+    // register with server
+    let register_request = TcpRequest { opcode: 0 };
+    let register_response = RegisterResponseMessage::from_tcp_response(
+        tcp_client.request(&register_request).await?
+    )?;
 
+    info!("Registered with server, id = {}", register_response.id);
 
     execute!(stdout(), EnterAlternateScreen)?;
 

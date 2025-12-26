@@ -13,6 +13,7 @@ use super::super::App;
 
 pub struct UdpClient {
     socket: Arc<UdpSocket>,
+    server_address: SocketAddr,
     app: Arc<Mutex<App>>
 }
 
@@ -24,10 +25,17 @@ impl UdpClient {
         let socket = UdpSocket::bind("127.0.0.1:0").await?;
 
         let server_address: SocketAddr = "127.0.0.1:9034".parse()?;
-
+        let client = UdpClient { socket: Arc::new(socket), server_address, app: app_mut }; 
         
+        client.send_position().await?;
+
+        Ok(client)
+
+    }
+
+    pub async fn send_position(&self) -> Result<()> {
         let encoded_message = {
-            let app = app_mut.lock().await;
+            let app = self.app.lock().await;
             let connection_message = PositionMessage {
                 id: 999,
                 position: app.player.clone()
@@ -39,12 +47,10 @@ impl UdpClient {
             bincode::serde::encode_to_vec(&connection_message, config)?
         };
 
-        info!("Sending encoded position message: {:?}", encoded_message);
-
-        socket.send_to(&encoded_message, server_address).await?;
-        Ok(UdpClient { socket: Arc::new(socket), app: app_mut})
-
+        self.socket.send_to(&encoded_message, self.server_address).await?;
+        Ok(())
     }
+
 
     pub async fn listen(&self) {
         let mut buf = [0u8; 1024];
