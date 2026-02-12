@@ -18,7 +18,7 @@
 
 #define PORT "9034" // port we're listening on
 
-const int COLS = 300;
+const int COLS = 200;
 const int ROWS = 50;
 
 const int TICK_RATE = 16;
@@ -26,10 +26,12 @@ const int TICK_RATE = 16;
 const float BALL_RADIUS = 2.0;
 const float PLAYER_LENGTH = 2.0;
 
-const int MAX_CLIENTS = 4;
+const int MAX_CLIENTS = 2;
 
 typedef struct {
 	struct sockaddr_in addr;
+	uint32_t tcp_port;
+	uint32_t udp_port;
 	uint32_t player_id;
 	bool active;
 } Client;
@@ -100,6 +102,49 @@ void deserialize_position_message(const uint8_t* buffer, struct PositionMessage*
 	memcpy(&msg->position.dy, &host_bits, 4);
 
 }
+
+typedef struct __attribute((packed)) {
+	uint16_t udp_port;
+	uint16_t tcp_port;
+} ClientNetworkingData;
+
+
+struct __attribute((packed)) TcpMessage {
+	uint32_t opcode;
+	ClientNetworkingData clientNetworkingData;	// TODO:  make this a union of all message types
+};
+
+void deserialize_tcp_message(char buffer[256], struct TcpMessage* msg) {
+	uint32_t temp_val;
+	memcpy(&temp_val, buffer, 4);
+	msg->opcode = ntohl(temp_val);
+
+	// TODO:  only do this for opcode 0
+	int offset = 4;
+	uint16_t udp_port;
+	uint16_t tcp_port;
+	memcpy(&udp_port, buffer + offset, sizeof(uint16_t));
+	offset += sizeof(uint16_t);
+	memcpy(&tcp_port, buffer + offset, sizeof(uint16_t));
+
+	msg->clientNetworkingData.udp_port = ntohs(udp_port);
+	msg->clientNetworkingData.tcp_port = ntohs(tcp_port);	
+}
+
+struct __attribute((packed)) TcpResponse {
+	uint32_t statuscode;
+	char msg[256];
+};
+
+void serialize_tcp_response(const struct TcpResponse* tcpResponse, uint8_t* buffer) {
+	uint32_t response_code = htonl(tcpResponse->statuscode);
+	memcpy(buffer, &response_code, 4);
+	size_t offset = 4;
+	
+	memcpy(buffer + offset, tcpResponse->msg, sizeof(tcpResponse->msg));
+}
+
+
 
 
 void tick(union sigval sv) {
@@ -201,27 +246,6 @@ void tick(union sigval sv) {
 	
 }
 
-int find_or_add_udp_client(Client* clients, struct sockaddr_in *addr)
-{
-	for (int i = 0; i < MAX_CLIENTS; i++) {
-		if (clients[i].active &&
-			clients[i].addr.sin_addr.s_addr == addr->sin_addr.s_addr &&
-			clients[i].addr.sin_port == addr->sin_port)
-		return i;
-	}
-
-	for (int i = 0; i < MAX_CLIENTS; i++) {
-		if (!clients[i].active) {
-			clients[i].addr = *addr;
-			clients[i].active = true;
-			clients[i].player_id = i;
-			printf("Registered UDP client %d\n", i);
-			return i;
-		}
-	}
-	return -1;
-}
-
 
 void positionMessageToString(const struct PositionMessage* msg, char* buffer, size_t buffer_size) {
 	snprintf(buffer, buffer_size, "id: %d, x: %f, y: %f", 
@@ -239,6 +263,8 @@ void *get_in_addr(struct sockaddr *sa)
 
 int main(void)
 {
+	printf("Starting the game server.\n");
+
 	// INIT PHYSICS ================================
 	Position ballPosition; 
 	ballPosition.x = COLS / 2.0;
@@ -278,6 +304,7 @@ int main(void)
 
 	// get a socket and bind it
 	// the server will listen on this socket for connections and data
+	printf("Initializing TCP networking.\n");
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
@@ -306,6 +333,7 @@ int main(void)
 	}
 
 	// UDP NETWORKING ===============================
+	printf("Initializing UDP networking.\n");
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_DGRAM;
@@ -344,6 +372,7 @@ int main(void)
 
 
 	// listen on TCP listener socket
+	printf("Staring TCP listener.\n");
 	if (listen(tcp_listener, 10) == -1) {
 		perror("listen");
 		exit(3);
@@ -426,7 +455,7 @@ int main(void)
 
 					}
 				} else if (i == udp_listener) {
-					// when we get a packet over the UDP socket, if we don't have it already add it to our list of clients
+					// handle data from UDP socket
 					struct sockaddr_in from;
 					socklen_t fromlen = sizeof(from);
 					
@@ -437,16 +466,18 @@ int main(void)
 						perror("recvfrom");
 					}
 
-					int client_id = find_or_add_udp_client(clients, &from);
-					if (client_id != -1) {
-						printf("Registering client %d\n", client_id);
-						// set player_position for the client to the received position
-						// TODO:  validate packet size
-						
-						struct PositionMessage positionMessage;
-						deserialize_position_message(buffer, &positionMessage);
-						player_positions[client_id] = positionMessage.position;
-						printf("setting position of client %d to (%f, %f)\n", client_id, positionMessage.position.x, positionMessage.position.y);
+					struct PositionMessage positionMessage;
+					deserialize_position_message(buffer, &positionMessage);
+
+					int client_index = positionMessage.id - 1;
+					if (client_index >= 0 && client_index < MAX_CLIENTS && clients[client_index].active) {
+						printf("Received UDP data from client %d (player_id %u)\n", client_index, positionMessage.id);
+						// learn/refresh the client's real UDP address
+						clients[client_index].addr = from;
+						player_positions[client_index] = positionMessage.position;
+						printf("setting position of client %d to (%f, %f)\n", client_index, positionMessage.position.x, positionMessage.position.y);
+					} else {
+						printf("Ignoring UDP packet with unknown player_id %u\n", positionMessage.id);
 					}
 
 					printf("udp_listener: got packet from %s\n",
@@ -466,17 +497,52 @@ int main(void)
 						close(i);
 						FD_CLR(i, &master);	// remove from master set
 					} else {
-						// we got some data from the client
-						for (j = 0; j <= fdmax; j++) {
-							// send to everyone (i.e., every fd in the master set)!
-							if (FD_ISSET(j, &master)) {
-								// except the listener and the sender
-								if (j != tcp_listener && j != udp_listener && j != i) {
-									if (send(j, buf, nbytes, 0) == -1) {
-										perror("send");
-									}
+						// check opcode
+						struct TcpMessage tcpMessage;
+						deserialize_tcp_message(buf, &tcpMessage);
+						if (tcpMessage.opcode == 0) {
+							// register request
+							printf("Registering player\n");
+
+							// find a free slot
+							int client_id = -1;
+							for (int k = 0; k < MAX_CLIENTS; k++) {
+								if (!clients[k].active) {
+									clients[k].active = true;
+									clients[k].player_id = k + 1;
+									memset(&clients[k].addr, 0, sizeof(clients[k].addr));
+									client_id = k + 1;
+									printf("Registered client %d (player_id %d)\n", k, client_id);
+									break;
 								}
 							}
+
+							if (client_id == -1) {
+								printf("No free client slots available\n");
+							}
+							// respond
+							struct TcpResponse tcpResponse;
+							tcpResponse.statuscode = 0;
+							tcpResponse.msg[0] = (client_id >> 24) & 0xFF;
+							tcpResponse.msg[1] = (client_id >> 16) & 0xFF;
+							tcpResponse.msg[2] = (client_id >> 8) & 0xFF;
+							tcpResponse.msg[3] = client_id & 0xFF;
+
+							// Clear remaining bytes
+							memset(tcpResponse.msg + 4, 0, 252);
+
+							uint8_t response_buffer[260];
+							for (int k = 0; k < sizeof(response_buffer) / sizeof(uint8_t); k++) {
+								printf("%d, ", response_buffer[k]);
+							}
+							serialize_tcp_response(&tcpResponse, response_buffer);
+
+							if (send(i, response_buffer, sizeof(response_buffer), 0) == -1) {
+								perror("send");
+							}
+
+							printf("sent %lu bytes\n", sizeof(response_buffer));
+
 						}
 					}
 				}

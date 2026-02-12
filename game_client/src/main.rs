@@ -22,11 +22,14 @@ use futures::{StreamExt, FutureExt};
 
 mod network;
 use network::udp_client::UdpClient;
-use network::models::Position;
+use network::tcp_client::TcpClient;
+use network::models::{Position, TcpRequest, RegisterResponseMessage, NetworkClientData};
+
+use log::{info};
 
 const TICK_RATE: u64 = 16;  // ~60 fps
 
-const COLS: u16 = 300;
+const COLS: u16 = 200;
 const ROWS: u16 = 50;
 
 const BALL_RADIUS: f32 = 2.0;
@@ -36,8 +39,12 @@ const PLAYER_MOVE_SPEED: f32 = 5.0;
 
 const ANTI_ALIASING_TIMEOUT: u64 = 350;
 
+const SERVER_ADDRESS: &str = "127.0.0.1:9034";
+const SERVER_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[derive(Debug)]
 pub struct App {
+    player_id: u32,
     player: Position, 
     opponent: Position,
     player_score: u8,
@@ -50,27 +57,45 @@ pub struct App {
     w_last_seen: Instant,
     s_pressed: bool,
     s_last_seen: Instant,
-    exit: bool
+    exit: bool,
+
+    last_udp_send: Instant,
+    last_udp_recv: Option<Instant>,
+    ping_ms: f64
 }
 
 
 impl App {
 
-    fn new() -> Self {
+    fn new(player_id: u32) -> Self {
         let now = Instant::now();
+        let right_position = Position {
+            x: COLS as f32 - 10.0,
+            y: ROWS as f32 / 2.0,
+            dx: 0.0,
+            dy: 0.0
+        };
+        let left_position = Position {
+            x: 10.0,
+            y: ROWS as f32 / 2.0,
+            dx: 0.0,
+            dy: 0.0
+        };
+
+        let player_position: Position;
+        let opponent_position: Position;
+        if player_id == 1 {
+            player_position = left_position;
+            opponent_position = right_position;
+        } else {
+            player_position = right_position;
+            opponent_position = left_position;
+        }
+            
         Self {
-            player: Position {
-                x: COLS as f32 - 10.0,
-                y: ROWS as f32 / 2.0,
-                dx: 0.0,
-                dy: 0.0
-            },
-            opponent: Position {
-                x: 10.0,
-                y: ROWS as f32 / 2.0,
-                dx: 0.0,
-                dy: 0.0
-            },
+            player_id: player_id,
+            player: player_position,
+            opponent: opponent_position,
             player_score: 0,
             opponent_score: 0,
             ball: Position {
@@ -86,12 +111,16 @@ impl App {
             w_last_seen: now,
             s_pressed: false,
             s_last_seen: now,
-            exit: false
+            exit: false,
+
+            last_udp_send: now,
+            last_udp_recv: None,
+            ping_ms: 0.0
         }
     }
 
     // run the main loop until the user quits
-    pub async fn run(state: Arc<Mutex<App>>, terminal: &mut DefaultTerminal) -> Result<()> {
+    pub async fn run(state: Arc<Mutex<App>>, terminal: &mut DefaultTerminal, udp_client: Arc<Mutex<UdpClient>>) -> Result<()> {
         let mut events = EventStream::new();
         let mut ticker = interval(Duration::from_millis(TICK_RATE));
         let mut last_tick = Instant::now();
@@ -107,7 +136,7 @@ impl App {
                     last_tick = now;
 
                     let mut app = state.lock().await;
-                    app.tick(delta_time)?;
+                    app.tick(delta_time, Arc::clone(&udp_client)).await?;
                     terminal.draw(|frame| app.draw(frame))?;
                 }
                 maybe_event = events.next().fuse() => {
@@ -121,7 +150,7 @@ impl App {
         Ok(())
     }
 
-    fn tick(&mut self, delta_time: f32) -> Result<()> {
+    async fn tick(&mut self, delta_time: f32, udp_client: Arc<Mutex<UdpClient>>) -> Result<()> {
         // commenting out to rely on server physics
         // self.ball.x += self.ball.dx * delta_time;
         // self.ball.y += self.ball.dy * delta_time;
@@ -163,7 +192,10 @@ impl App {
         } else if self.player.y <= 0.0 {
             self.player.y = 0.0;
         }
-        
+
+        // send position
+        udp_client.lock().await.send_position(&self.player, self.player_id).await?;
+        self.last_udp_send = Instant::now();
 
         Ok(())
     }
@@ -171,11 +203,20 @@ impl App {
     fn game_canvas(&self) -> impl Widget + '_ {
 
         let title = Line::from("Terminal Game".bold());
+        let server_status = match self.last_udp_recv {
+            None => format!("{} (registered)", SERVER_ADDRESS).yellow(),
+            Some(t) if Instant::now().duration_since(t) > SERVER_TIMEOUT => {
+                format!("{} (no response)", SERVER_ADDRESS).red()
+            }
+            Some(_) => format!("{} ping {:.1}ms", SERVER_ADDRESS, self.ping_ms).green(),
+        };
+
         let instructions = Line::from(vec![
             "Quit".into(),
             "<Q> ".blue().bold(),
             "Movement".into(),
-            "<W><A><S><D>".blue().bold()
+            "<W><A><S><D> ".blue().bold(),
+            server_status,
         ]);
 
         let block = Block::bordered()
@@ -256,16 +297,32 @@ impl App {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let app = Arc::new(Mutex::new(App::new()));
-
     // logging config
     log4rs::init_file("log4rs.yaml", Default::default()).unwrap();
 
-    // networking
-    let udp_client = UdpClient::connect(Arc::clone(&app)).await?;
-    tokio::spawn(async move { udp_client.listen().await });
+    // networking configuration
+    let udp_client = UdpClient::connect().await?;
+    let mut tcp_client: TcpClient = TcpClient::connect().await?;
 
+    // register with server
+    let message = NetworkClientData { udp_port: udp_client.socket.local_addr()?.port(), tcp_port: tcp_client.stream.local_addr()?.port() };
+    info!("Sending network info to server.  udp_port = {}, tcp_port = {}", udp_client.socket.local_addr()?.port(), tcp_client.stream.local_addr()?.port());
+    let register_request = TcpRequest { opcode: 0, network_client_data: message };
+    let tcp_response = tcp_client.request(&register_request).await?;
+    let tcp_response_status = tcp_response.statuscode;
+    info!("tcp_response status code: {}", tcp_response_status);
+    let register_response = RegisterResponseMessage::from_tcp_response(tcp_response)?;
 
+    info!("Registered with server, id = {}", register_response.id);
+
+    // init game
+    let app = Arc::new(Mutex::new(App::new(register_response.id)));
+
+    let udp_client = Arc::new(Mutex::new(udp_client));
+
+    let listen_socket = Arc::clone(&udp_client.lock().await.socket);
+    let listen_app = Arc::clone(&app);
+    tokio::spawn(async move { UdpClient::listen(listen_socket, listen_app).await });
     execute!(stdout(), EnterAlternateScreen)?;
 
     let fixed_area = Rect::new(0, 0, COLS, ROWS);
@@ -275,7 +332,7 @@ async fn main() -> Result<()> {
         }
     );
     
-    let result = App::run(app, &mut terminal).await; 
+    let result = App::run(app, &mut terminal, udp_client).await; 
     ratatui::restore();
     result
 }
