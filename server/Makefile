@@ -1,15 +1,19 @@
 CC = clang
 CFLAGS = -Wall -g
 BUILD_DIR = build
+SRC_DIR = src
+
+SRCS = $(SRC_DIR)/server.c $(SRC_DIR)/protocol.c $(SRC_DIR)/game.c
+OBJS = $(BUILD_DIR)/server.o $(BUILD_DIR)/protocol.o $(BUILD_DIR)/game.o
 
 all: $(BUILD_DIR)/server
 
-# 1.  LINKING:  Create final executable from object files ($a = target (e.g., build/server), $^ = dependencies (e.g. build/server.o))
-$(BUILD_DIR)/server: $(BUILD_DIR)/server.o
+# 1.  LINKING:  Create final executable from object files
+$(BUILD_DIR)/server: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
 # 2.  COMPILING:  create object files from source files
-$(BUILD_DIR)/server.o: src/server.c | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # 3.  BUILD_DIR:  creates the build directory if missing
