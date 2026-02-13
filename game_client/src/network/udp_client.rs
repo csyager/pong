@@ -8,7 +8,7 @@ use bincode::config;
 use std::time::Instant;
 use log::{info, error};
 
-use super::models::{Position, PositionMessage};
+use super::models::{Position, GameStateMessage, PositionMessage};
 use super::super::App;
 
 pub struct UdpClient {
@@ -56,26 +56,32 @@ impl UdpClient {
                         .with_big_endian()
                         .with_fixed_int_encoding();
 
-                    let (position_message, _len): (PositionMessage, usize) = bincode::serde::decode_from_slice(&buf, config).expect("failed to deserialize packet");
-                    info!("Received position message for id {}: ({}, {}) with velocity vector ({}, {})", position_message.id, position_message.position.x, position_message.position.y, position_message.position.dx, position_message.position.dy);
+                    let (game_state_message, _len): (GameStateMessage, usize) = bincode::decode_from_slice(&buf[..len], config).expect("failed to deserialize packet");
 
                     let mut app = app.lock().await;
                     let now = Instant::now();
                     app.ping_ms = now.duration_since(app.last_udp_send).as_secs_f64() * 1000.0;
                     app.last_udp_recv = Some(now);
 
-                    if position_message.id == 0 {
-                        info!("Received position for ball.");
-                        app.ball.x = position_message.position.x as f32;
-                        app.ball.y = position_message.position.y as f32;
-                        app.ball.dx = position_message.position.dx as f32;
-                        app.ball.dy = position_message.position.dy as f32;
-                    } else {
-                        info!("Received position for player id {}.", position_message.id);
-                        app.opponent.x = position_message.position.x as f32;
-                        app.opponent.y = position_message.position.y as f32;
-                        app.opponent.dx = position_message.position.dx as f32;
-                        app.opponent.dy = position_message.position.dy as f32;
+                    app.seconds_to_start = game_state_message.seconds_to_start;
+                    for (i, position) in game_state_message.positions.iter().enumerate() {
+                        if i == 0 {
+                            app.ball.x = position.x;
+                            app.ball.y = position.y;
+                            app.ball.dx = position.dx;
+                            app.ball.dy = position.dy;
+                        } else if i as u32 == app.player_id {
+                            let dx = (app.player.x - position.x).abs();
+                            let dy = (app.player.y - position.y).abs();
+                            if dx > crate::RECONCILE_THRESHOLD || dy > crate::RECONCILE_THRESHOLD {
+                                info!("Reconciling player position (drift: dx={}, dy={})", dx, dy);
+                                app.player.x = position.x;
+                                app.player.y = position.y;
+                            }
+                        } else {
+                            app.opponent.x = position.x;
+                            app.opponent.y = position.y;
+                        }
                     }
                 }
                 Err(e) => error!("Receiver error: {}", e)

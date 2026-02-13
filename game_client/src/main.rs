@@ -3,7 +3,8 @@ use ratatui::{
     style::{Stylize, Color},
     symbols::border,
     text::{Line},
-    widgets::{Block, Widget, canvas::{Canvas, Circle, Rectangle }},
+    layout::Alignment,
+    widgets::{Block, Paragraph, Widget, canvas::{Canvas, Circle, Rectangle }},
     DefaultTerminal, TerminalOptions, Viewport, Frame
 };
 use crossterm::{
@@ -23,7 +24,7 @@ use futures::{StreamExt, FutureExt};
 mod network;
 use network::udp_client::UdpClient;
 use network::tcp_client::TcpClient;
-use network::models::{Position, TcpRequest, RegisterResponseMessage, NetworkClientData};
+use network::models::{Position, TcpRequest, RegisterResponseMessage};
 
 use log::{info};
 
@@ -41,6 +42,7 @@ const ANTI_ALIASING_TIMEOUT: u64 = 350;
 
 const SERVER_ADDRESS: &str = "127.0.0.1:9034";
 const SERVER_TIMEOUT: Duration = Duration::from_secs(2);
+const RECONCILE_THRESHOLD: f32 = 5.0;
 
 #[derive(Debug)]
 pub struct App {
@@ -61,7 +63,11 @@ pub struct App {
 
     last_udp_send: Instant,
     last_udp_recv: Option<Instant>,
-    ping_ms: f64
+    ping_ms: f64,
+
+    game_active: bool,
+    seconds_to_start: i32,
+    status_msg: String
 }
 
 
@@ -115,7 +121,11 @@ impl App {
 
             last_udp_send: now,
             last_udp_recv: None,
-            ping_ms: 0.0
+            ping_ms: 0.0,
+
+            game_active: false,
+            seconds_to_start: 0,
+            status_msg: "Waiting on players...".to_string()
         }
     }
 
@@ -172,6 +182,25 @@ impl App {
         // }
        
         let now = Instant::now();
+
+        // always send position so the server learns our UDP address
+        udp_client.lock().await.send_position(&self.player, self.player_id).await?;
+        self.last_udp_send = Instant::now();
+
+        if !self.game_active {
+            if self.seconds_to_start > 0 {
+                self.status_msg = format!("Starting in {}...", self.seconds_to_start);
+                return Ok(())
+            } else if self.last_udp_recv.is_none() {
+                self.status_msg = "Waiting on players...".to_string();
+                return Ok(())
+            } else {
+                // seconds_to_start hit 0 or went negative, game has started
+                self.game_active = true;
+                self.status_msg = "".to_string();
+            }
+        }
+
         let timeout = Duration::from_millis(ANTI_ALIASING_TIMEOUT);
         if self.s_pressed && now.duration_since(self.s_last_seen) > timeout {
             self.s_pressed = false;
@@ -192,10 +221,6 @@ impl App {
         } else if self.player.y <= 0.0 {
             self.player.y = 0.0;
         }
-
-        // send position
-        udp_client.lock().await.send_position(&self.player, self.player_id).await?;
-        self.last_udp_send = Instant::now();
 
         Ok(())
     }
@@ -262,6 +287,29 @@ impl App {
         let render_area = area.intersection(frame.area());
 
         frame.render_widget(self.game_canvas(), render_area);
+
+        if !self.game_active {
+            let overlay_width = 40;
+            let overlay_height = 5;
+            let overlay_area = Rect::new(
+                render_area.x + (render_area.width - overlay_width) / 2,
+                render_area.y + (render_area.height - overlay_height) / 2,
+                overlay_width,
+                overlay_height,
+            );
+
+            let overlay_block = Block::bordered()
+                .border_set(border::DOUBLE)
+                .style(ratatui::style::Style::default().bg(Color::Black));
+
+            let msg = Paragraph::new(self.status_msg.clone())
+                .alignment(Alignment::Center)
+                .bold()
+                .yellow()
+                .block(overlay_block);
+
+            frame.render_widget(msg, overlay_area);
+        }
     }
 
     fn handle_event(&mut self, event: Event) -> Result<()> {
@@ -305,9 +353,8 @@ async fn main() -> Result<()> {
     let mut tcp_client: TcpClient = TcpClient::connect().await?;
 
     // register with server
-    let message = NetworkClientData { udp_port: udp_client.socket.local_addr()?.port(), tcp_port: tcp_client.stream.local_addr()?.port() };
-    info!("Sending network info to server.  udp_port = {}, tcp_port = {}", udp_client.socket.local_addr()?.port(), tcp_client.stream.local_addr()?.port());
-    let register_request = TcpRequest { opcode: 0, network_client_data: message };
+    info!("Registering with server.");
+    let register_request = TcpRequest { opcode: 0, msg: [0; 256]};
     let tcp_response = tcp_client.request(&register_request).await?;
     let tcp_response_status = tcp_response.statuscode;
     info!("tcp_response status code: {}", tcp_response_status);
@@ -320,9 +367,15 @@ async fn main() -> Result<()> {
 
     let udp_client = Arc::new(Mutex::new(udp_client));
 
+    // start UDP listener thread
     let listen_socket = Arc::clone(&udp_client.lock().await.socket);
     let listen_app = Arc::clone(&app);
     tokio::spawn(async move { UdpClient::listen(listen_socket, listen_app).await });
+
+    // start TCP listener thread
+    let tcp_stream = Arc::clone(&tcp_client.stream);
+    let tcp_listen_app = Arc::clone(&app);
+    tokio::spawn(async move { TcpClient::listen(tcp_stream, tcp_listen_app).await });
     execute!(stdout(), EnterAlternateScreen)?;
 
     let fixed_area = Rect::new(0, 0, COLS, ROWS);

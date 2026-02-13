@@ -1,6 +1,7 @@
-use serde::{Serialize, Deserialize, Deserializer};
+use serde::{Serialize, Deserialize};
 use zerocopy::{FromBytes, Immutable, KnownLayout};
 use bincode::{config};
+use bincode::de::{Decoder, Decode};
 use anyhow::Result;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -19,18 +20,34 @@ pub struct PositionMessage {
     pub position: Position
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[repr(C)]
-pub struct NetworkClientData {
-    pub udp_port: u16,
-    pub tcp_port: u16
+#[derive(Debug)]
+pub struct GameStateMessage {
+    pub seconds_to_start: i32,
+    pub num_positions: u32,
+    pub positions: Vec<Position>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-#[repr(C)]
+impl<Context> Decode<Context> for GameStateMessage {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+        let seconds_to_start = i32::decode(decoder)?;
+        let num_positions = u32::decode(decoder)?;
+        let mut positions = Vec::with_capacity(num_positions as usize);
+        for _ in 0..num_positions {
+            let x = f32::decode(decoder)?;
+            let y = f32::decode(decoder)?;
+            let dx = f32::decode(decoder)?;
+            let dy = f32::decode(decoder)?;
+            positions.push(Position { x, y, dx, dy });
+        }
+        Ok(GameStateMessage { seconds_to_start, num_positions, positions })
+    }
+}
+
+#[derive(FromBytes, Immutable, KnownLayout, Debug)]
+#[repr(C, packed)]
 pub struct TcpRequest {
     pub opcode: u32,
-    pub network_client_data: NetworkClientData
+    pub msg: [u8; 256]
 }
 
 #[derive(Debug, FromBytes, Immutable, KnownLayout)]

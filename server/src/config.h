@@ -9,4 +9,7 @@
 #define PLAYER_LENGTH 2.0f
 #define MAX_CLIENTS 2
 
+#define BALL_MAX_VELO 10.0
+#define BALL_MAX_STARTING_VELO 10.0
+
 #endif

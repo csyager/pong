@@ -1,19 +1,17 @@
 use tokio::sync::Mutex;
 use anyhow::Result;
 use std::sync::Arc;
-use std::io::{self, Read, Write};
 use tokio::net::TcpStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use std::net::{SocketAddr};
-use bincode::{config};
-use zerocopy::{FromBytes};
+use std::net::SocketAddr;
+use zerocopy::FromBytes;
 
 use log::{info, error};
 
+use crate::App;
 use super::models::{TcpRequest, TcpResponse};
 
 pub struct TcpClient {
-    pub stream: TcpStream,
+    pub stream: Arc<TcpStream>,
 }
 
 impl TcpClient {
@@ -22,27 +20,90 @@ impl TcpClient {
         let server_address: SocketAddr = "127.0.0.1:9034".parse()?;
         let stream = TcpStream::connect(server_address).await?;
 
-        let client = TcpClient { stream };
+        let client = TcpClient { stream: Arc::new(stream) };
 
         Ok(client)
     }
 
     pub async fn request(&mut self, request: &TcpRequest) -> Result<TcpResponse> {
-        let config = config::standard()
-            .with_big_endian()
-            .with_fixed_int_encoding();
-
-        let request_vec = bincode::serde::encode_to_vec(request, config)?;
+        let mut request_buf = [0u8; 260];
+        request_buf[0..4].copy_from_slice(&request.opcode.to_be_bytes());
+        request_buf[4..260].copy_from_slice(&request.msg);
 
         info!("sending request to server.");
-        self.stream.write_all(&request_vec).await?;
-        self.stream.flush().await?;
+        loop {
+            self.stream.writable().await?;
+            match self.stream.try_write(&request_buf) {
+                Ok(_) => break,
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
 
         let mut buf = [0u8; 260];
-        let bytes_read = self.stream.read_exact(&mut buf).await?;
-        info!("read {} bytes {:?}", bytes_read, buf);
+        let mut total = 0;
+        while total < buf.len() {
+            self.stream.readable().await?;
+            match self.stream.try_read(&mut buf[total..]) {
+                Ok(0) => return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "connection closed").into()),
+                Ok(n) => total += n,
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        info!("read {} bytes", total);
 
-        let response = TcpResponse::read_from_bytes(&buf).map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Buffer size mismatch"))?;       
+        let response = TcpResponse::read_from_bytes(&buf).map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Buffer size mismatch"))?;
         Ok(response)
+    }
+
+    pub async fn listen(stream: Arc<TcpStream>, app: Arc<Mutex<App>>) {
+        let mut buf = [0u8; 260];
+        info!("Starting TCP listener loop.");
+        loop {
+            // Wait until the stream is readable
+            if let Err(e) = stream.readable().await {
+                error!("TCP stream not readable: {}", e);
+                break;
+            }
+
+            match stream.try_read(&mut buf) {
+                Ok(0) => {
+                    info!("TCP connection closed by server.");
+                    break;
+                }
+                Ok(_n) => {
+                    let request = match TcpRequest::read_from_bytes(&buf) {
+                        Ok(req) => req,
+                        Err(_) => {
+                            error!("Failed to deserialize TcpResponse");
+                            continue;
+                        }
+                    };
+                    
+                    Self::handle_tcp_event(request);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // No data ready yet, loop back to readable()
+                    continue;
+                }
+                Err(e) => {
+                    error!("TCP Receiver error: {}", e);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn handle_tcp_event(request: TcpRequest) {
+        match u32::from_be(request.opcode) {
+            1 => {
+                info!("Received request to start game.");
+                info!("Received start time: {}", i64::from_be_bytes(request.msg[0..8].try_into().unwrap()));
+            }
+            _ => {
+                info!("Unknown opcode!")
+            }
+        }
     }
 }

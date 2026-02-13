@@ -33,12 +33,16 @@ int main(void)
 {
 	printf("Starting the game server.\n");
 
+	// Seed the random number generator once
+	srand(time(NULL));
+
 	// INIT PHYSICS ================================
 	Position ballPosition; 
 	ballPosition.x = COLS / 2.0;
 	ballPosition.y = ROWS / 2.0;
-	ballPosition.dx = 5.0;
-	ballPosition.dy = 5.0;
+	ballPosition.dx = (-1.0 + 2.0 * ((double)rand() / RAND_MAX)) * BALL_MAX_STARTING_VELO;
+	ballPosition.dy = (-1.0 + 2.0 * ((double)rand() / RAND_MAX)) * BALL_MAX_STARTING_VELO;
+
 
 
 	// TCP NETWORKING ============================
@@ -57,7 +61,7 @@ int main(void)
 	struct sockaddr_storage remoteaddr;	//client address
 	socklen_t addrlen;
 
-	char buf[256];		// buffer for client data
+	char buf[260];		// buffer for client data, 260 = 4 bit opcode + 256 bit buffer
 	int nbytes;
 
 	char remoteIP[INET6_ADDRSTRLEN];
@@ -161,7 +165,7 @@ int main(void)
 	struct sigevent sev = {0};
 	struct itimerspec its;
 	
-	TickState tick_state = { .ball_position = &ballPosition, .player_positions = &player_positions, .udp_sock_fd = udp_listener, .clients = clients};
+	TickState tick_state = { .ball_position = &ballPosition, .player_positions = &player_positions, .udp_sock_fd = udp_listener, .tcp_sock_fd = tcp_listener, .clients = clients, .game_started = false};
 	clock_gettime(CLOCK_MONOTONIC, &tick_state.latest_tick);
 
 	sev.sigev_notify = SIGEV_THREAD;
@@ -278,6 +282,7 @@ int main(void)
 								if (!clients[k].active) {
 									clients[k].active = true;
 									clients[k].player_id = k + 1;
+									clients[k].tcp_fd = i;
 									memset(&clients[k].addr, 0, sizeof(clients[k].addr));
 									client_id = k + 1;
 									printf("Registered client %d (player_id %d)\n", k, client_id);
