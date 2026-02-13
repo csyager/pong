@@ -40,8 +40,11 @@ int main(void)
 	Position ballPosition; 
 	ballPosition.x = COLS / 2.0;
 	ballPosition.y = ROWS / 2.0;
-	ballPosition.dx = (-1.0 + 2.0 * ((double)rand() / RAND_MAX)) * BALL_MAX_STARTING_VELO;
-	ballPosition.dy = (-1.0 + 2.0 * ((double)rand() / RAND_MAX)) * BALL_MAX_STARTING_VELO;
+
+	double speed = 5.0 + ((double)rand() / RAND_MAX) * (BALL_MAX_STARTING_VELO - 5.0);
+	ballPosition.dx = (rand() % 2 == 0) ? speed : -speed;
+	speed = 5.0 + ((double)rand() / RAND_MAX) * (BALL_MAX_STARTING_VELO - 5.0);
+	ballPosition.dy = (rand() % 2 == 0) ? speed : -speed;
 
 
 

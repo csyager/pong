@@ -161,26 +161,6 @@ impl App {
     }
 
     async fn tick(&mut self, delta_time: f32, udp_client: Arc<Mutex<UdpClient>>) -> Result<()> {
-        // commenting out to rely on server physics
-        // self.ball.x += self.ball.dx * delta_time;
-        // self.ball.y += self.ball.dy * delta_time;
-
-        // if self.ball.x - BALL_RADIUS <= 0.0 {
-        //     self.ball.x = BALL_RADIUS;
-        //     self.ball.dx *= -1.0;
-        // } else if self.ball.x + BALL_RADIUS > COLS.into() {
-        //     self.ball.x = COLS as f64 - BALL_RADIUS;
-        //     self.ball.dx *= -1.0
-        // }
-
-        // if self.ball.y - BALL_RADIUS <= 0.0 {
-        //     self.ball.y = BALL_RADIUS;
-        //     self.ball.dy *= -1.0
-        // } else if self.ball.y + BALL_RADIUS > ROWS.into() {
-        //     self.ball.y = ROWS as f64 - BALL_RADIUS;
-        //     self.ball.dy *= -1.0;
-        // }
-       
         let now = Instant::now();
 
         // always send position so the server learns our UDP address
@@ -227,7 +207,20 @@ impl App {
 
     fn game_canvas(&self) -> impl Widget + '_ {
 
-        let title = Line::from("Terminal Game".bold());
+        let left_score; 
+        let right_score;
+        if self.player_id == 1 {
+            left_score = format!(" Player: {}    ", self.player_score).green().bold();
+            right_score = format!("    Opponent: {} ", self.opponent_score).red().bold();
+        } else {
+            left_score = format!(" Opponent: {}    ", self.opponent_score).red().bold();
+            right_score = format!("    Player: {} ", self.player_score).green().bold();
+        }
+        let title = Line::from(vec![
+            left_score, 
+            "Pong".bold(),
+            right_score
+        ]);
         let server_status = match self.last_udp_recv {
             None => format!("{} (registered)", SERVER_ADDRESS).yellow(),
             Some(t) if Instant::now().duration_since(t) > SERVER_TIMEOUT => {
