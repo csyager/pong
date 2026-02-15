@@ -14,10 +14,16 @@ typedef struct {
 	struct timespec latest_tick;
 	Client* clients;
 
-	bool game_started;
+	bool game_active;
 	time_t scheduled_start;
+
+	uint8_t left_score;
+	uint8_t right_score;
+
+
 } TickState;
 
 void tick(union sigval sv);
+void reset_game(TickState *tick_state);
 
 #endif

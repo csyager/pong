@@ -342,8 +342,8 @@ async fn main() -> Result<()> {
     log4rs::init_file("log4rs.yaml", Default::default()).unwrap();
 
     // networking configuration
-    let udp_client = UdpClient::connect().await?;
-    let mut tcp_client: TcpClient = TcpClient::connect().await?;
+    let udp_client = UdpClient::connect(SERVER_ADDRESS).await?;
+    let mut tcp_client: TcpClient = TcpClient::connect(SERVER_ADDRESS).await?;
 
     // register with server
     info!("Registering with server.");
@@ -365,10 +365,6 @@ async fn main() -> Result<()> {
     let listen_app = Arc::clone(&app);
     tokio::spawn(async move { UdpClient::listen(listen_socket, listen_app).await });
 
-    // start TCP listener thread
-    let tcp_stream = Arc::clone(&tcp_client.stream);
-    let tcp_listen_app = Arc::clone(&app);
-    tokio::spawn(async move { TcpClient::listen(tcp_stream, tcp_listen_app).await });
     execute!(stdout(), EnterAlternateScreen)?;
 
     let fixed_area = Rect::new(0, 0, COLS, ROWS);

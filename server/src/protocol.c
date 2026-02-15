@@ -75,8 +75,17 @@ void deserialize_tcp_message(char buffer[256], struct TcpMessage* msg) {
 void serialize_game_state_message(uint8_t* buffer, const GameStateMessage* gameStateMessage) {
 	int offset = 0;
 
-	uint32_t start_time = htonl((uint32_t)gameStateMessage->start_time);
-	memcpy(buffer + offset, &start_time, 4);
+	buffer[offset] = gameStateMessage->left_score;
+	offset += 1;
+	buffer[offset] = gameStateMessage->right_score;
+	offset += 1;
+
+	uint8_t active = gameStateMessage->game_active ? 1 : 0;
+	buffer[offset] = active;
+	offset += 1;
+
+	uint32_t seconds_to_start = htonl((uint32_t)gameStateMessage->seconds_to_start);
+	memcpy(buffer + offset, &seconds_to_start, 4);
 	offset += 4;
 
 	uint32_t num_positions = htonl(gameStateMessage->num_positions);

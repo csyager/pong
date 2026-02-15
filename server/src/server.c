@@ -168,7 +168,7 @@ int main(void)
 	struct sigevent sev = {0};
 	struct itimerspec its;
 	
-	TickState tick_state = { .ball_position = &ballPosition, .player_positions = &player_positions, .udp_sock_fd = udp_listener, .tcp_sock_fd = tcp_listener, .clients = clients, .game_started = false};
+	TickState tick_state = { .ball_position = &ballPosition, .player_positions = &player_positions, .udp_sock_fd = udp_listener, .tcp_sock_fd = tcp_listener, .clients = clients, .game_started = false, .left_score = 0, .right_score = 0};
 	clock_gettime(CLOCK_MONOTONIC, &tick_state.latest_tick);
 
 	sev.sigev_notify = SIGEV_THREAD;

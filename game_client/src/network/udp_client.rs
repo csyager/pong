@@ -18,12 +18,12 @@ pub struct UdpClient {
 
 impl UdpClient {
 
-    pub async fn connect() -> Result<UdpClient> {
+    pub async fn connect(server_address: &str) -> Result<UdpClient> {
         
-        // 127.0.0.1:0 binds to an available local IP and auto-assigned port
-        let socket = UdpSocket::bind("127.0.0.1:0").await?;
+        // 0.0.0.0:0 binds to an available local IP and auto-assigned port
+        let socket = UdpSocket::bind("0.0.0.0:0").await?;
 
-        let server_address: SocketAddr = "127.0.0.1:9034".parse()?;
+        let server_address: SocketAddr = server_address.parse()?;
         let client = UdpClient { socket: Arc::new(socket), server_address };
         
         Ok(client)
@@ -63,7 +63,15 @@ impl UdpClient {
                     app.ping_ms = now.duration_since(app.last_udp_send).as_secs_f64() * 1000.0;
                     app.last_udp_recv = Some(now);
 
+                    app.game_active = game_state_message.game_active;
                     app.seconds_to_start = game_state_message.seconds_to_start;
+                    if app.player_id == 1 {
+                        app.player_score = game_state_message.left_score;
+                        app.opponent_score = game_state_message.right_score;
+                    } else {
+                        app.player_score = game_state_message.right_score;
+                        app.opponent_score = game_state_message.left_score;
+                    }
                     for (i, position) in game_state_message.positions.iter().enumerate() {
                         if i == 0 {
                             app.ball.x = position.x;

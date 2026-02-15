@@ -15,9 +15,9 @@ pub struct TcpClient {
 }
 
 impl TcpClient {
-    pub async fn connect() -> Result<TcpClient> {
+    pub async fn connect(server_address: &str) -> Result<TcpClient> {
 
-        let server_address: SocketAddr = "127.0.0.1:9034".parse()?;
+        let server_address: SocketAddr = server_address.parse()?;
         let stream = TcpStream::connect(server_address).await?;
 
         let client = TcpClient { stream: Arc::new(stream) };
@@ -57,7 +57,7 @@ impl TcpClient {
         Ok(response)
     }
 
-    pub async fn listen(stream: Arc<TcpStream>, app: Arc<Mutex<App>>) {
+    pub async fn listen(stream: Arc<TcpStream>) {
         let mut buf = [0u8; 260];
         info!("Starting TCP listener loop.");
         loop {
@@ -95,12 +95,8 @@ impl TcpClient {
         }
     }
 
-    fn handle_tcp_event(request: TcpRequest) {
+    async fn handle_tcp_event(request: TcpRequest) {
         match u32::from_be(request.opcode) {
-            1 => {
-                info!("Received request to start game.");
-                info!("Received start time: {}", i64::from_be_bytes(request.msg[0..8].try_into().unwrap()));
-            }
             _ => {
                 info!("Unknown opcode!")
             }

@@ -35,6 +35,9 @@ struct __attribute((packed)) PositionMessage {
  * Structrue broadcasted from server to clients containing game state info
  */
 typedef struct __attribute((packed)) {
+	uint8_t left_score;
+	uint8_t right_score;
+	bool game_active;
 	int32_t seconds_to_start;
 	uint32_t num_positions;
 	Position positions[MAX_CLIENTS + 1];  //position for each player, plus the ball
