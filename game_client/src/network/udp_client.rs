@@ -23,7 +23,10 @@ impl UdpClient {
         // 0.0.0.0:0 binds to an available local IP and auto-assigned port
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
 
-        let server_address: SocketAddr = server_address.parse()?;
+        let server_address: SocketAddr = tokio::net::lookup_host(server_address)
+            .await?
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("DNS resolution failed for {}", server_address))?;
         let client = UdpClient { socket: Arc::new(socket), server_address };
         
         Ok(client)

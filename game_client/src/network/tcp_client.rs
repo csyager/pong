@@ -2,7 +2,6 @@ use tokio::sync::Mutex;
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use std::net::SocketAddr;
 use zerocopy::FromBytes;
 
 use log::{info, error};
@@ -17,7 +16,6 @@ pub struct TcpClient {
 impl TcpClient {
     pub async fn connect(server_address: &str) -> Result<TcpClient> {
 
-        let server_address: SocketAddr = server_address.parse()?;
         let stream = TcpStream::connect(server_address).await?;
 
         let client = TcpClient { stream: Arc::new(stream) };
