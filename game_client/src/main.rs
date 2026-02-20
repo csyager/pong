@@ -30,14 +30,6 @@ use log::{info};
 
 const TICK_RATE: u64 = 16;  // ~60 fps
 
-const COLS: u16 = 200;
-const ROWS: u16 = 50;
-
-const BALL_RADIUS: f32 = 2.0;
-const PLAYER_LENGTH: f32 = 2.0;
-
-const PLAYER_MOVE_SPEED: f32 = 5.0;
-
 const ANTI_ALIASING_TIMEOUT: u64 = 350;
 
 const SERVER_ADDRESS: &str = "127.0.0.1:9034";
@@ -54,6 +46,12 @@ pub struct App {
     ball: Position,
     ball_dx: u8,
     ball_dy: u8,
+
+    rows: u32,
+    cols: u32,
+    player_move_speed: f32,
+    ball_radius: f32,
+    player_length: f32,
 
     w_pressed: bool,
     w_last_seen: Instant,
@@ -73,17 +71,24 @@ pub struct App {
 
 impl App {
 
-    fn new(player_id: u32) -> Self {
+    fn new(
+        player_id: u32,
+        rows: u32,
+        cols: u32,
+        player_move_speed: f32,
+        ball_radius: f32,
+        player_length: f32
+    ) -> Self {
         let now = Instant::now();
         let right_position = Position {
-            x: COLS as f32 - 10.0,
-            y: ROWS as f32 / 2.0,
+            x: cols as f32 - 10.0,
+            y: rows as f32 / 2.0,
             dx: 0.0,
             dy: 0.0
         };
         let left_position = Position {
             x: 10.0,
-            y: ROWS as f32 / 2.0,
+            y: rows as f32 / 2.0,
             dx: 0.0,
             dy: 0.0
         };
@@ -105,13 +110,19 @@ impl App {
             player_score: 0,
             opponent_score: 0,
             ball: Position {
-                x: COLS as f32 / 2.0,
-                y: ROWS as f32 / 2.0,
+                x: cols as f32 / 2.0,
+                y: rows as f32 / 2.0,
                 dx: 5.0,
                 dy: 5.0
             },
             ball_dx: 0,
             ball_dy: 0,
+
+            rows: rows,
+            cols: cols,
+            player_move_speed: player_move_speed,
+            ball_radius: ball_radius,
+            player_length: player_length,
 
             w_pressed: false,
             w_last_seen: now,
@@ -190,14 +201,14 @@ impl App {
         }
 
         if self.s_pressed {
-            self.player.y -= PLAYER_MOVE_SPEED * delta_time;
+            self.player.y -= self.player_move_speed * delta_time;
         }
         if self.w_pressed {
-            self.player.y += PLAYER_MOVE_SPEED * delta_time;
+            self.player.y += self.player_move_speed * delta_time;
         }
 
-        if self.player.y >= ROWS.into() {
-            self.player.y = ROWS.into();
+        if self.player.y >= self.rows as f32 {
+            self.player.y = self.rows as f32;
         } else if self.player.y <= 0.0 {
             self.player.y = 0.0;
         }
@@ -250,33 +261,33 @@ impl App {
                 ctx.draw(&Circle {
                     x: self.ball.x as f64,
                     y: self.ball.y as f64,
-                    radius: BALL_RADIUS as f64,
+                    radius: self.ball_radius as f64,
                     color: Color::Yellow
                 });
 
                 ctx.draw(&Rectangle {
                     x: self.player.x as f64,
                     y: self.player.y as f64,
-                    width: PLAYER_LENGTH as f64,
-                    height: PLAYER_LENGTH as f64,
+                    width: 2.0,
+                    height: self.player_length as f64,
                     color: Color::Green
                 });
 
                 ctx.draw(&Rectangle {
                     x: self.opponent.x as f64,
                     y: self.opponent.y as f64,
-                    width: PLAYER_LENGTH as f64,
-                    height: PLAYER_LENGTH as f64,
+                    width: 2.0,
+                    height: self.player_length as f64,
                     color: Color::Red
                 });
             })
-        .x_bounds([0.0, f64::from(COLS)])
-        .y_bounds([0.0, f64::from(ROWS)])
+        .x_bounds([0.0, f64::from(self.cols)])
+        .y_bounds([0.0, f64::from(self.rows)])
     }
 
 
     fn draw(&self, frame: &mut Frame) {
-        let area = Rect::new(0, 0, COLS, ROWS);
+        let area = Rect::new(0, 0, self.cols as u16, self.rows as u16);
         let render_area = area.intersection(frame.area());
 
         frame.render_widget(self.game_canvas(), render_area);
@@ -339,7 +350,10 @@ impl App {
 #[tokio::main]
 async fn main() -> Result<()> {
     // logging config
-    log4rs::init_file("log4rs.yaml", Default::default()).unwrap();
+    std::fs::create_dir_all("log").expect("failed to create log directory");
+    let log_yaml = include_str!("../log4rs.yaml");
+    let raw_config: log4rs::config::RawConfig = serde_yaml::from_str(log_yaml).expect("failed to parse embedded log4rs config");
+    log4rs::init_raw_config(raw_config).expect("failed to initialize logger");
 
     // networking configuration
     let udp_client = UdpClient::connect(SERVER_ADDRESS).await?;
@@ -354,9 +368,17 @@ async fn main() -> Result<()> {
     let register_response = RegisterResponseMessage::from_tcp_response(tcp_response)?;
 
     info!("Registered with server, id = {}", register_response.id);
+    info!("Server config: rows = {}, cols = {}, player_move_speed = {}, ball_radius = {}, player_length = {}", register_response.rows, register_response.cols, register_response.player_move_speed, register_response.ball_radius, register_response.player_length);
 
     // init game
-    let app = Arc::new(Mutex::new(App::new(register_response.id)));
+    let app = Arc::new(Mutex::new(App::new(
+                register_response.id,
+                register_response.rows,
+                register_response.cols,
+                register_response.player_move_speed,
+                register_response.ball_radius,
+                register_response.player_length
+    )));
 
     let udp_client = Arc::new(Mutex::new(udp_client));
 
@@ -367,7 +389,7 @@ async fn main() -> Result<()> {
 
     execute!(stdout(), EnterAlternateScreen)?;
 
-    let fixed_area = Rect::new(0, 0, COLS, ROWS);
+    let fixed_area = Rect::new(0, 0, register_response.cols as u16, register_response.rows as u16);
     let mut terminal = ratatui::init_with_options(
         TerminalOptions {
             viewport: Viewport::Fixed(fixed_area)

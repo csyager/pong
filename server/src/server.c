@@ -37,13 +37,13 @@ int main(void)
 	srand(time(NULL));
 
 	// INIT PHYSICS ================================
-	Position ballPosition; 
+	Position ballPosition;
 	ballPosition.x = COLS / 2.0;
 	ballPosition.y = ROWS / 2.0;
 
-	double speed = 5.0 + ((double)rand() / RAND_MAX) * (BALL_MAX_STARTING_VELO - 5.0);
+	double speed = BALL_MIN_STARTING_VELO + ((double)rand() / RAND_MAX) * (BALL_MAX_STARTING_VELO - BALL_MIN_STARTING_VELO);
 	ballPosition.dx = (rand() % 2 == 0) ? speed : -speed;
-	speed = 5.0 + ((double)rand() / RAND_MAX) * (BALL_MAX_STARTING_VELO - 5.0);
+	speed = BALL_MIN_STARTING_VELO + ((double)rand() / RAND_MAX) * (BALL_MAX_STARTING_VELO - BALL_MIN_STARTING_VELO);
 	ballPosition.dy = (rand() % 2 == 0) ? speed : -speed;
 
 
@@ -52,13 +52,13 @@ int main(void)
 	fd_set master;		// master file descriptor list
 	fd_set read_fds;	// temp file descriptor list for select()
 	int fdmax;		// largest file descriptor
-	
+
 	Client clients[MAX_CLIENTS];
-	memset(clients, 0, sizeof(clients));	
+	memset(clients, 0, sizeof(clients));
 
 	Position player_positions[MAX_CLIENTS];
 	memset(player_positions, 0, sizeof(player_positions));
-	
+
 	int tcp_listener, udp_listener;		// FD for the server listener
 	int newfd;		// newly accepted fd
 	struct sockaddr_storage remoteaddr;	//client address
@@ -167,8 +167,8 @@ int main(void)
 	timer_t timer_id;
 	struct sigevent sev = {0};
 	struct itimerspec its;
-	
-	TickState tick_state = { .ball_position = &ballPosition, .player_positions = &player_positions, .udp_sock_fd = udp_listener, .tcp_sock_fd = tcp_listener, .clients = clients, .game_started = false, .left_score = 0, .right_score = 0};
+
+	TickState tick_state = { .ball_position = &ballPosition, .player_positions = player_positions, .udp_sock_fd = udp_listener, .tcp_sock_fd = tcp_listener, .clients = clients, .game_active = false, .left_score = 0, .right_score = 0};
 	clock_gettime(CLOCK_MONOTONIC, &tick_state.latest_tick);
 
 	sev.sigev_notify = SIGEV_THREAD;
@@ -233,7 +233,7 @@ int main(void)
 					// handle data from UDP socket
 					struct sockaddr_in from;
 					socklen_t fromlen = sizeof(from);
-					
+
 					uint8_t buffer[1024];
 					if ((nbytes = recvfrom(udp_listener, &buffer, sizeof(buffer), 0,
 							(struct sockaddr *)&from, &fromlen)) <= 0) {
@@ -299,18 +299,39 @@ int main(void)
 							// respond
 							struct TcpResponse tcpResponse;
 							tcpResponse.statuscode = 0;
-							tcpResponse.msg[0] = (client_id >> 24) & 0xFF;
-							tcpResponse.msg[1] = (client_id >> 16) & 0xFF;
-							tcpResponse.msg[2] = (client_id >> 8) & 0xFF;
-							tcpResponse.msg[3] = client_id & 0xFF;
 
-							// Clear remaining bytes
-							memset(tcpResponse.msg + 4, 0, 252);
+							// send server config to client (big-endian / network byte order)
+							uint32_t net_id = htonl(client_id);
+							uint32_t rows = htonl(ROWS);
+							uint32_t cols = htonl(COLS);
+							
+							float player_move_speed_f = PLAYER_MOVE_SPEED;
+							uint32_t player_move_speed;
+							memcpy(&player_move_speed, &player_move_speed_f, sizeof(player_move_speed));
+							player_move_speed = htonl(player_move_speed);
+
+							float ball_radius_f = BALL_RADIUS;
+							uint32_t ball_radius;
+							memcpy(&ball_radius, &ball_radius_f, sizeof(ball_radius));
+							ball_radius = htonl(ball_radius);
+
+							float player_length_f = PLAYER_LENGTH;
+							uint32_t player_length;
+							memcpy(&player_length, &player_length_f, sizeof(player_length));
+							player_length = htonl(player_length);
+
+							int offset = 0;
+							memcpy(tcpResponse.msg + offset, &net_id, sizeof(net_id)); offset += sizeof(net_id);
+							memcpy(tcpResponse.msg + offset, &rows, sizeof(rows)); offset += sizeof(rows);
+							memcpy(tcpResponse.msg + offset, &cols, sizeof(cols)); offset += sizeof(cols);
+							memcpy(tcpResponse.msg + offset, &player_move_speed, sizeof(player_move_speed)); offset += sizeof(player_move_speed);
+							memcpy(tcpResponse.msg + offset, &ball_radius, sizeof(ball_radius)); offset += sizeof(ball_radius);
+							memcpy(tcpResponse.msg + offset, &player_length, sizeof(player_length)); offset += sizeof(player_length);
+
+							// clear rest of buffer
+							memset(tcpResponse.msg + offset, 0, sizeof(tcpResponse.msg) - offset);
 
 							uint8_t response_buffer[260];
-							for (int k = 0; k < sizeof(response_buffer) / sizeof(uint8_t); k++) {
-								printf("%d, ", response_buffer[k]);
-							}
 							serialize_tcp_response(&tcpResponse, response_buffer);
 
 							if (send(i, response_buffer, sizeof(response_buffer), 0) == -1) {

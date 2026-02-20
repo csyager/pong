@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <sys/socket.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "config.h"
 #include "protocol.h"
@@ -134,4 +135,11 @@ void reset_game(TickState *tick_state) {
 
 	tick_state->ball_position->x = COLS / 2.0;
 	tick_state->ball_position->y = ROWS / 2.0;
+
+	double speed = BALL_MIN_STARTING_VELO + ((double)rand() / RAND_MAX) * (BALL_MAX_STARTING_VELO - BALL_MIN_STARTING_VELO);
+	tick_state->ball_position->dx = (rand() % 2 == 0) ? speed : -speed;
+	speed = BALL_MIN_STARTING_VELO + ((double)rand() / RAND_MAX) * (BALL_MAX_STARTING_VELO - BALL_MIN_STARTING_VELO);
+	tick_state->ball_position->dy = (rand() % 2 == 0) ? speed : -speed;
+
+
 }

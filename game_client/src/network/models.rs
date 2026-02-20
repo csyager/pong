@@ -67,7 +67,12 @@ pub struct TcpResponse {
 #[derive(Serialize, Deserialize, Debug)]
 #[repr(C)]
 pub struct RegisterResponseMessage {
-    pub id: u32
+    pub id: u32,
+    pub rows: u32,
+    pub cols: u32,
+    pub player_move_speed: f32,
+    pub ball_radius: f32,
+    pub player_length: f32
 }
 
 impl RegisterResponseMessage {
